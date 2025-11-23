@@ -16,6 +16,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ anime, onBack, initialEpisode
   const [currentEpisodeNum, setCurrentEpisodeNum] = useState(initialEpisode);
   const [streamData, setStreamData] = useState<StreamData | null>(null);
   const [activeQuality, setActiveQuality] = useState<string>('default');
+  const [activeProvider, setActiveProvider] = useState<'aniwatch' | 'animeflv' | 'consumet'>('consumet');
   
   // UI States
   const [isLoadingInfo, setIsLoadingInfo] = useState(true);
@@ -87,10 +88,11 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ anime, onBack, initialEpisode
         videoRef.current.load();
       }
 
-      const data = await fetchStreamSource(targetEpisode.id);
-      
+      const data = await fetchStreamSource(targetEpisode.id, targetEpisode.provider);
+
       if (data && data.sources.length > 0) {
         setStreamData(data);
+        setActiveProvider(targetEpisode.provider || 'consumet');
       } else {
         setError('No se pudo obtener el video. Intenta con otro episodio.');
       }
@@ -268,8 +270,8 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ anime, onBack, initialEpisode
                  <span className="bg-anime-primary px-2 py-0.5 rounded text-[10px] text-white font-bold uppercase tracking-wider shadow-neon">
                     Episodio {currentEpisodeNum}
                  </span>
-                 <span className="text-xs text-green-400 border border-green-500/30 bg-green-500/10 px-2 py-0.5 rounded font-medium">
-                    Consumet (Gogoanime)
+                 <span className="text-xs text-green-400 border border-green-500/30 bg-green-500/10 px-2 py-0.5 rounded font-medium capitalize">
+                    {activeProvider === 'aniwatch' ? 'Aniwatch' : activeProvider === 'animeflv' ? 'AnimeFLV' : 'Gogoanime'}
                  </span>
               </div>
             </div>
