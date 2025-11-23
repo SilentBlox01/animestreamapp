@@ -45,7 +45,8 @@ export interface Episode {
   id: string;
   number: number;
   title: string;
-  thumbnail: string;
+  thumbnail?: string;
+  isFiller?: boolean;
 }
 
 export interface Server {
@@ -55,6 +56,19 @@ export interface Server {
   quality: string;
   lang: string;
   icon?: string;
+}
+
+export interface StreamSource {
+  url: string;
+  isM3U8: boolean;
+  quality?: string;
+}
+
+export interface StreamData {
+  sources: StreamSource[];
+  subtitles?: { url: string; lang: string }[];
+  intro?: { start: number; end: number };
+  outro?: { start: number; end: number };
 }
 
 export enum ViewState {

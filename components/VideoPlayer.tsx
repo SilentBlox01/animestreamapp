@@ -1,7 +1,7 @@
-
-import React, { useState, useEffect } from 'react';
-import { Play, SkipForward, ArrowLeft, ExternalLink, Server as ServerIcon, Info, AlertTriangle, MonitorPlay, Loader2, Globe, Youtube } from 'lucide-react';
-import { Anime, Server, Episode } from '../types';
+import React, { useState, useEffect, useRef } from 'react';
+import { Play, SkipForward, ArrowLeft, Loader2, AlertTriangle, Settings, Subtitles, Volume2, VolumeX, Maximize, Minimize, RefreshCw } from 'lucide-react';
+import { Anime, Episode, StreamData } from '../types';
+import { fetchStreamEpisodes, fetchStreamSource } from '../services/animeService';
 
 interface VideoPlayerProps {
   anime: Anime;
@@ -10,123 +10,253 @@ interface VideoPlayerProps {
   onEpisodeComplete?: (episodeNumber: number) => void;
 }
 
-// Updated Server List - prioritizing working content
-const SERVERS: Server[] = [
-  { id: 'yt', name: 'Smart Search (YT)', url: '', quality: 'HD', lang: 'Varios', icon: 'YT' },
-  { id: 'trailer', name: 'Trailer / Clip', url: '', quality: 'FHD', lang: 'Japonés', icon: 'TR' },
-  { id: 'demo', name: 'Servidor Demo', url: '', quality: '1080p', lang: 'Latino', icon: 'DM' },
-  { id: 'crunchy', name: 'Crunchyroll', url: '', quality: 'FHD', lang: 'Oficial', icon: 'CR' },
-  { id: 'animeflv', name: 'AnimeFLV (Web)', url: '', quality: 'HD', lang: 'Sub Esp', icon: 'FLV' },
-];
-
-const getAnimeSlug = (title: string) => {
-  return title
-    .toLowerCase()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // Remove accents
-    .replace(/[^\w\s-]/g, '') // Remove special chars
-    .trim()
-    .replace(/\s+/g, '-'); // Replace spaces with hyphens
-};
-
 const VideoPlayer: React.FC<VideoPlayerProps> = ({ anime, onBack, initialEpisode = 1, onEpisodeComplete }) => {
-  const [activeServer, setActiveServer] = useState<Server>(SERVERS[0]); 
-  const [currentEpisode, setCurrentEpisode] = useState(initialEpisode);
-  const [videoUrl, setVideoUrl] = useState<string>('');
-  const [iframeError, setIframeError] = useState(false);
-  const [theaterMode, setTheaterMode] = useState(false);
-  const [isLoadingStream, setIsLoadingStream] = useState(false);
-  const [streamError, setStreamError] = useState('');
+  // State for streaming logic
+  const [streamEpisodes, setStreamEpisodes] = useState<Episode[]>([]);
+  const [currentEpisodeNum, setCurrentEpisodeNum] = useState(initialEpisode);
+  const [streamData, setStreamData] = useState<StreamData | null>(null);
+  const [activeQuality, setActiveQuality] = useState<string>('default');
+  
+  // UI States
+  const [isLoadingInfo, setIsLoadingInfo] = useState(true);
+  const [isLoadingSource, setIsLoadingSource] = useState(false);
+  const [error, setError] = useState<string>('');
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [showControls, setShowControls] = useState(true);
+  const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Generate episodes list
-  const episodes: Episode[] = Array.from({ length: anime.episodes || 12 }, (_, i) => ({
-    id: `ep-${i+1}`,
-    number: i + 1,
-    title: `Episodio ${i + 1}`,
-    thumbnail: anime.images.jpg.large_image_url
-  }));
+  // Refs
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const hlsRef = useRef<any>(null);
 
+  // 1. Initial Load: Find Anime on Provider and get episodes
   useEffect(() => {
-    const loadVideoSource = async () => {
-        setIframeError(false);
-        setStreamError('');
-        setVideoUrl('');
-        setIsLoadingStream(true);
+    let mounted = true;
+    const loadEpisodes = async () => {
+      setIsLoadingInfo(true);
+      setError('');
+      
+      const episodes = await fetchStreamEpisodes(anime.title);
+      
+      if (mounted) {
+        if (episodes.length > 0) {
+          setStreamEpisodes(episodes);
+        } else {
+          setError(`No se encontró "${anime.title}" en el servidor de streaming.`);
+          // Fallback visual
+          setStreamEpisodes(Array.from({ length: anime.episodes || 12 }, (_, i) => ({
+             id: `fallback-${i+1}`,
+             number: i + 1,
+             title: `Episodio ${i+1} (No disponible)`
+          })));
+        }
+        setIsLoadingInfo(false);
+      }
+    };
 
-        // Simulate network delay for realism
-        await new Promise(r => setTimeout(r, 500));
+    loadEpisodes();
+    return () => { mounted = false; };
+  }, [anime.title]);
 
-        try {
-            switch (activeServer.id) {
-                case 'yt':
-                    // Smart YouTube Search for the episode
-                    // Uses 'embed?listType=search' to auto-play the most relevant result
-                    const query = `${anime.title} episode ${currentEpisode} anime full`;
-                    setVideoUrl(`https://www.youtube.com/embed?listType=search&list=${encodeURIComponent(query)}`);
-                    break;
+  // 2. Load Source when Current Episode changes
+  useEffect(() => {
+    const loadSource = async () => {
+      if (streamEpisodes.length === 0) return;
 
-                case 'trailer':
-                    if (anime.trailer?.embed_url) {
-                         // Fix autoplay in some trailer URLs
-                         setVideoUrl(anime.trailer.embed_url.replace('autoplay=1', 'autoplay=0'));
-                    } else {
-                        // Fallback if no trailer
-                        setStreamError('Este anime no tiene trailer oficial disponible.');
-                    }
-                    break;
+      const targetEpisode = streamEpisodes.find(e => e.number === currentEpisodeNum);
+      if (!targetEpisode || targetEpisode.id.startsWith('fallback')) {
+        if (!isLoadingInfo) setError('Este episodio no está disponible en el servidor.');
+        return;
+      }
 
-                case 'demo':
-                    // High quality reliable video to demonstrate player capabilities
-                    // Using "Sintel" - a common open movie that looks like CGI anime
-                    setVideoUrl('https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4');
-                    break;
+      setIsLoadingSource(true);
+      setError('');
+      setStreamData(null);
+      
+      // Cleanup previous HLS/Video
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+      if (videoRef.current) {
+        videoRef.current.pause();
+        videoRef.current.removeAttribute('src');
+        videoRef.current.load();
+      }
 
-                case 'crunchy':
-                    setVideoUrl(`https://www.crunchyroll.com/search?q=${encodeURIComponent(anime.title)}`);
-                    setStreamError('Abrir en Crunchyroll para ver legalmente.');
-                    break;
+      const data = await fetchStreamSource(targetEpisode.id);
+      
+      if (data && data.sources.length > 0) {
+        setStreamData(data);
+      } else {
+        setError('No se pudo obtener el video. Intenta con otro episodio.');
+      }
+      setIsLoadingSource(false);
+    };
 
-                case 'animeflv':
-                    const slug = getAnimeSlug(anime.title);
-                    setVideoUrl(`https://www3.animeflv.net/ver/${slug}-${currentEpisode}`);
-                    setStreamError('Abrir en AnimeFLV (requiere pestaña externa).');
-                    break;
+    if (!isLoadingInfo) {
+      loadSource();
+    }
+  }, [currentEpisodeNum, streamEpisodes, isLoadingInfo]);
 
-                default:
-                    setVideoUrl('');
-            }
-        } catch (err) {
-            console.error("Error setting video:", err);
-            setIframeError(true);
-        } finally {
-            setIsLoadingStream(false);
+  // 3. Initialize HLS Player when source is available
+  useEffect(() => {
+    if (!streamData || !videoRef.current) return;
+
+    // Logic to select quality: 'default' > 'backup' > 'auto' > first available
+    const source = streamData.sources.find(s => s.quality === 'default') || 
+                   streamData.sources.find(s => s.quality === 'backup') ||
+                   streamData.sources.find(s => s.quality === 'auto') || 
+                   streamData.sources[0];
+
+    if (!source) {
+        setError("No hay fuentes de video compatibles.");
+        return;
+    }
+    
+    setActiveQuality(source.quality || 'auto');
+
+    const video = videoRef.current;
+    const Hls = (window as any).Hls;
+
+    const handleMediaError = () => {
+        if (hlsRef.current) {
+           hlsRef.current.recoverMediaError();
         }
     };
 
-    loadVideoSource();
-  }, [activeServer, currentEpisode, anime]);
+    if (Hls && Hls.isSupported() && source.isM3U8) {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+      }
 
-  const handleNextEpisode = () => {
-    if (currentEpisode < (anime.episodes || 24)) {
-      const nextEp = currentEpisode + 1;
-      setCurrentEpisode(nextEp);
-      if (onEpisodeComplete) onEpisodeComplete(nextEp);
+      const hls = new Hls({
+        xhrSetup: function(xhr: any) {
+             // Optional: some CORS handling adjustments if needed
+        },
+        // Configuración para ser más resiliente
+        manifestLoadingTimeOut: 10000,
+        manifestLoadingMaxRetry: 3,
+        levelLoadingTimeOut: 10000,
+        fragLoadingTimeOut: 20000,
+      });
+
+      hlsRef.current = hls;
+      hls.loadSource(source.url);
+      hls.attachMedia(video);
+      
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        video.play().catch(e => console.log("Autoplay blocked, waiting for user interaction", e));
+        setIsPlaying(true);
+      });
+
+      hls.on(Hls.Events.ERROR, (_: any, data: any) => {
+          if (data.fatal) {
+              switch (data.type) {
+                  case Hls.ErrorTypes.NETWORK_ERROR:
+                      console.log("HLS Network Error, trying to recover...");
+                      hls.startLoad();
+                      break;
+                  case Hls.ErrorTypes.MEDIA_ERROR:
+                      console.log("HLS Media Error, trying to recover...");
+                      hls.recoverMediaError();
+                      break;
+                  default:
+                      console.error("HLS Fatal Error", data);
+                      hls.destroy();
+                      setError("Error fatal de reproducción. Intenta recargar.");
+                      break;
+              }
+          }
+      });
+
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Native HLS support (Safari)
+      video.src = source.url;
+      video.addEventListener('loadedmetadata', () => {
+        video.play().catch(() => {});
+        setIsPlaying(true);
+      });
+      video.addEventListener('error', () => {
+          setError("Error nativo del reproductor.");
+      });
+    } else {
+      // Direct MP4 fallback
+      video.src = source.url;
+      video.play().catch(() => {});
+      setIsPlaying(true);
+    }
+
+    return () => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+      }
+    };
+  }, [streamData]);
+
+  // Handlers
+  const handlePlayPause = () => {
+    if (videoRef.current) {
+      if (videoRef.current.paused) {
+        videoRef.current.play();
+        setIsPlaying(true);
+      } else {
+        videoRef.current.pause();
+        setIsPlaying(false);
+      }
     }
   };
 
-  const handleExternalOpen = () => {
-      window.open(videoUrl, '_blank', 'noopener,noreferrer');
+  const toggleMute = () => {
+    if (videoRef.current) {
+      videoRef.current.muted = !videoRef.current.muted;
+      setIsMuted(videoRef.current.muted);
+    }
+  };
+
+  const toggleFullscreen = () => {
+    if (!containerRef.current) return;
+    if (!document.fullscreenElement) {
+      containerRef.current.requestFullscreen();
+      setIsFullscreen(true);
+    } else {
+      document.exitFullscreen();
+      setIsFullscreen(false);
+    }
+  };
+
+  const handleMouseMove = () => {
+    setShowControls(true);
+    if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+    controlsTimeoutRef.current = setTimeout(() => {
+      if (isPlaying) setShowControls(false);
+    }, 3000);
+  };
+
+  const handleNextEpisode = () => {
+      const next = currentEpisodeNum + 1;
+      // Check if next episode exists in our stream list
+      if (streamEpisodes.some(e => e.number === next)) {
+          setCurrentEpisodeNum(next);
+          if (onEpisodeComplete) onEpisodeComplete(next);
+      }
+  };
+
+  const reloadPlayer = () => {
+      // Force reload of current episode logic
+      const current = currentEpisodeNum;
+      setCurrentEpisodeNum(-1);
+      setTimeout(() => setCurrentEpisodeNum(current), 100);
   };
 
   return (
-    <div className={`flex flex-col gap-6 animate-fade-in relative z-20 ${theaterMode ? 'lg:flex-col' : 'lg:flex-row'}`}>
+    <div className="flex flex-col gap-6 animate-fade-in relative z-20">
       
-      {/* Backdrop for Theater Mode */}
-      {theaterMode && (
-        <div className="fixed inset-0 bg-[#0b0c15]/98 z-[-1] transition-opacity duration-500 backdrop-blur-sm"></div>
-      )}
-
-      {/* Main Player Area */}
-      <div className={`flex-1 transition-all duration-500 ${theaterMode ? 'max-w-7xl mx-auto w-full' : ''}`}>
+      <div className="flex-1">
+        {/* Header */}
         <div className="flex items-center justify-between mb-4 px-2">
           <div className="flex items-center gap-4">
             <button onClick={onBack} className="hover:bg-white/10 p-2 rounded-full transition-colors text-white group">
@@ -135,184 +265,168 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ anime, onBack, initialEpisode
             <div>
               <h2 className="text-xl font-bold text-white font-display tracking-wide">{anime.title}</h2>
               <div className="flex items-center gap-2 mt-1">
-                 <span className="bg-anime-primary px-2 py-0.5 rounded text-[10px] text-white font-bold uppercase tracking-wider shadow-neon">Episodio {currentEpisode}</span> 
-                 <span className="text-xs text-gray-400">Server {activeServer.name}</span>
+                 <span className="bg-anime-primary px-2 py-0.5 rounded text-[10px] text-white font-bold uppercase tracking-wider shadow-neon">
+                    Episodio {currentEpisodeNum}
+                 </span>
+                 <span className="text-xs text-green-400 border border-green-500/30 bg-green-500/10 px-2 py-0.5 rounded font-medium">
+                    Consumet (Gogoanime)
+                 </span>
               </div>
             </div>
           </div>
-          
-          <button 
-            onClick={() => setTheaterMode(!theaterMode)}
-            className={`p-2 rounded-lg flex items-center gap-2 text-sm font-bold transition-all ${theaterMode ? 'bg-anime-primary text-white shadow-neon' : 'bg-white/5 text-gray-300 hover:text-white hover:bg-white/10'}`}
-          >
-            <MonitorPlay size={18} />
-            <span className="hidden md:block">{theaterMode ? 'Modo Cine' : 'Modo Cine'}</span>
-          </button>
         </div>
 
-        {/* Server Tabs */}
-        <div className="bg-[#151621] rounded-t-2xl flex overflow-x-auto scrollbar-hide border-b border-white/5 mx-2 md:mx-0">
-            {SERVERS.map(server => (
-                <button
-                    key={server.id}
-                    onClick={() => setActiveServer(server)}
-                    className={`px-6 py-4 text-sm font-bold flex items-center gap-3 transition-all whitespace-nowrap relative ${
-                        activeServer.id === server.id 
-                        ? 'text-white bg-[#1a1b26]' 
-                        : 'text-gray-500 hover:text-gray-300 hover:bg-white/5'
-                    }`}
-                >
-                    {activeServer.id === server.id && (
-                        <span className="absolute bottom-0 left-0 w-full h-0.5 bg-anime-primary shadow-[0_-2px_10px_rgba(255,61,113,0.5)]"></span>
-                    )}
-                    <span className={`w-8 h-6 rounded flex items-center justify-center text-[10px] font-black uppercase ${activeServer.id === server.id ? 'bg-anime-primary text-white shadow-neon' : 'bg-gray-800 text-gray-400'}`}>
-                        {server.icon}
-                    </span>
-                    {server.name}
-                </button>
-            ))}
-        </div>
-
-        {/* Video Container */}
-        <div className="relative aspect-video bg-black shadow-2xl rounded-b-2xl overflow-hidden group select-none ring-1 ring-white/5 mx-2 md:mx-0">
-             
-             {/* Loading State */}
-             {isLoadingStream && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-20 backdrop-blur-sm">
+        {/* Video Player Container */}
+        <div 
+            ref={containerRef}
+            className="relative aspect-video bg-black shadow-2xl rounded-2xl overflow-hidden group select-none ring-1 ring-white/5 mx-2 md:mx-0"
+            onMouseMove={handleMouseMove}
+            onMouseLeave={() => isPlaying && setShowControls(false)}
+        >
+             {/* Loading & Error States Overlay */}
+             {(isLoadingInfo || isLoadingSource) && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-30 backdrop-blur-sm">
                     <Loader2 size={48} className="text-anime-primary animate-spin mb-4" />
-                    <p className="text-white font-bold animate-pulse">Conectando a {activeServer.name}...</p>
+                    <p className="text-white font-bold animate-pulse">
+                        {isLoadingInfo ? "Buscando stream compatible..." : "Cargando video..."}
+                    </p>
                 </div>
              )}
 
-             {/* Error/Web Fallback State */}
-             {(iframeError || streamError) && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#151621] z-10 p-8 text-center">
+             {error && !isLoadingInfo && !isLoadingSource && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-[#151621] z-30 p-8 text-center">
                     <AlertTriangle size={48} className="text-yellow-500 mb-4" />
-                    <h3 className="text-xl font-bold text-white mb-2">
-                        {streamError || "Reproducción restringida"}
-                    </h3>
-                    <p className="text-gray-400 text-sm max-w-md mb-6 leading-relaxed">
-                        El servidor seleccionado ({activeServer.name}) requiere abrir el contenido en una nueva ventana por temas de derechos de autor.
-                    </p>
+                    <h3 className="text-xl font-bold text-white mb-2">Error de Reproducción</h3>
+                    <p className="text-gray-400 text-sm max-w-md mb-6">{error}</p>
                     <button 
-                        onClick={handleExternalOpen}
-                        className="bg-anime-primary hover:bg-pink-600 text-white px-8 py-3 rounded-xl font-bold flex items-center gap-2 transition-all shadow-neon"
+                        onClick={reloadPlayer}
+                        className="bg-white/10 hover:bg-white/20 text-white px-6 py-2 rounded-full text-sm flex items-center gap-2"
                     >
-                        <ExternalLink size={20} />
-                        Abrir Reproductor Externo
+                        <RefreshCw size={16} /> Reintentar
                     </button>
                 </div>
              )}
 
-             <div className="w-full h-full bg-black relative animate-fade-in">
-                {!isLoadingStream && !iframeError && !streamError && videoUrl && (
-                    activeServer.id === 'demo' ? (
-                         <video 
-                            controls 
-                            autoPlay 
-                            className="w-full h-full object-contain"
-                            src={videoUrl}
-                         >
-                            Tu navegador no soporta video HTML5.
-                         </video>
-                    ) : (
-                        <iframe 
-                            key={videoUrl} 
-                            src={videoUrl} 
-                            title={`${anime.title} - Episode ${currentEpisode}`}
-                            className="w-full h-full" 
-                            frameBorder="0"
-                            allowFullScreen
-                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                            onError={() => setIframeError(true)}
-                        ></iframe>
-                    )
-                )}
-             </div>
-        </div>
+             {/* HTML Video Element */}
+             <video 
+                ref={videoRef}
+                className="w-full h-full object-contain cursor-pointer"
+                playsInline
+                onClick={handlePlayPause}
+                onEnded={handleNextEpisode}
+             />
 
-        {/* Controls */}
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-4 px-2 md:px-0">
-             <div className="flex items-center gap-4">
-                 <button 
-                   onClick={handleNextEpisode}
-                   disabled={currentEpisode >= (anime.episodes || 24)}
-                   className="flex items-center gap-2 px-6 py-3 bg-white/5 hover:bg-white/10 rounded-xl text-sm font-bold text-white transition-colors disabled:opacity-50 border border-white/5"
-                 >
-                    <SkipForward size={18} /> Siguiente
-                 </button>
-                 
-                 <button 
-                   onClick={handleExternalOpen}
-                   className="flex items-center gap-2 px-4 py-3 text-anime-primary hover:bg-anime-primary/10 rounded-xl text-sm font-bold transition-colors border border-anime-primary/20"
-                 >
-                    <Globe size={18} /> Fuente Original
-                 </button>
-             </div>
-             
-             <div className="flex items-center gap-2 text-xs text-gray-500">
-                <ServerIcon size={14} /> Fuente: {activeServer.name}
-             </div>
-        </div>
-
-        {/* Info Box */}
-        {activeServer.id === 'yt' && (
-             <div className="mt-6 mx-2 md:mx-0 p-4 bg-red-500/10 rounded-xl border border-red-500/10 flex gap-4 items-start">
-                <Youtube size={20} className="text-red-500 shrink-0 mt-0.5" />
-                <div className="text-xs md:text-sm text-gray-400 leading-relaxed">
-                    <p className="font-bold text-gray-200 mb-1">Smart Search YouTube:</p>
-                    Este modo busca automáticamente el episodio en YouTube. Si no encuentras el capítulo completo, prueba el <strong>Servidor Demo</strong> para probar el player o <strong>Crunchyroll</strong> para la versión oficial.
+             {/* Custom Controls Overlay */}
+             <div className={`absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/40 z-20 flex flex-col justify-between p-4 transition-opacity duration-300 ${showControls ? 'opacity-100' : 'opacity-0'}`}>
+                {/* Top Bar */}
+                <div className="flex justify-between items-start">
+                    <div className="text-white/80 text-sm font-bold drop-shadow-md">
+                         {anime.title} - Ep. {currentEpisodeNum}
+                    </div>
+                    {/* Quality Selector (Mock UI for now, logic can be extended) */}
+                    <div className="flex gap-2">
+                        {streamData && (
+                            <div className="bg-black/50 backdrop-blur-md px-3 py-1 rounded-md text-xs font-bold text-white border border-white/10 flex items-center gap-1">
+                                <Settings size={12} />
+                                {activeQuality?.toUpperCase() || 'AUTO'}
+                            </div>
+                        )}
+                    </div>
                 </div>
-            </div>
-        )}
+
+                {/* Center Play Button (only if paused) */}
+                {!isPlaying && !isLoadingSource && !error && (
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                        <div className="bg-anime-primary/90 p-5 rounded-full shadow-neon backdrop-blur-sm transform scale-100 animate-pulse">
+                            <Play size={32} fill="white" className="text-white ml-1" />
+                        </div>
+                    </div>
+                )}
+
+                {/* Bottom Bar */}
+                <div className="flex items-center gap-4">
+                    <button onClick={handlePlayPause} className="text-white hover:text-anime-primary transition-colors">
+                        {isPlaying ? <span className="font-black text-xl">||</span> : <Play size={24} fill="currentColor" />}
+                    </button>
+
+                    <button onClick={toggleMute} className="text-white hover:text-gray-300 transition-colors">
+                        {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
+                    </button>
+
+                    {/* Progress Bar Placeholder - Native controls handle this mostly in full screen, but custom implementation would go here */}
+                    <div className="flex-1 h-1 bg-gray-600 rounded-full overflow-hidden">
+                         <div className="h-full bg-anime-primary w-0 relative"></div> 
+                    </div>
+
+                    <button className="text-white hover:text-gray-300 transition-colors" title="Subtítulos">
+                        <Subtitles size={20} className={streamData?.subtitles ? "text-white" : "text-gray-600"} />
+                    </button>
+
+                    <button onClick={toggleFullscreen} className="text-white hover:text-gray-300 transition-colors">
+                         {isFullscreen ? <Minimize size={20} /> : <Maximize size={20} />}
+                    </button>
+                </div>
+             </div>
+        </div>
+
+        {/* Controls Below Player */}
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-4 px-2 md:px-0">
+             <button 
+               onClick={handleNextEpisode}
+               className="flex items-center gap-2 px-8 py-3 bg-anime-primary hover:bg-pink-600 rounded-xl text-sm font-bold text-white transition-all shadow-neon disabled:opacity-50 disabled:shadow-none"
+               disabled={!streamEpisodes.some(e => e.number === currentEpisodeNum + 1)}
+             >
+                <SkipForward size={18} /> Siguiente Episodio
+             </button>
+             
+             <p className="text-xs text-gray-500 italic max-w-md text-right">
+                Fuente: Gogoanime (vía Consumet). Si falla, es posible que el servidor de streaming tenga alta carga.
+             </p>
+        </div>
       </div>
 
       {/* Episodes Sidebar */}
-      <div className={`w-full transition-all duration-300 ${theaterMode ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4' : 'lg:w-[400px] flex flex-col h-[600px] lg:h-auto lg:max-h-[800px]'}`}>
-         <div className={`bg-[#151621] rounded-2xl border border-white/5 flex flex-col overflow-hidden shadow-lg ${theaterMode ? 'col-span-full h-80' : 'h-full'}`}>
+      <div className="lg:w-[350px] flex flex-col lg:max-h-[800px]">
+         <div className="bg-[#151621] rounded-2xl border border-white/5 flex flex-col overflow-hidden shadow-lg h-[600px]">
             <div className="p-5 border-b border-white/5 flex justify-between items-center bg-[#1a1b26]">
                 <h3 className="font-bold text-white font-display text-lg tracking-wide">Episodios</h3>
-                <span className="text-xs text-white bg-anime-primary px-2 py-0.5 rounded font-bold shadow-neon">{anime.episodes || '?'} Caps</span>
+                <span className="text-xs text-white bg-anime-primary px-2 py-0.5 rounded font-bold shadow-neon">
+                   {streamEpisodes.length} Disp.
+                </span>
             </div>
             
-            <div className="flex-1 overflow-y-auto p-3 space-y-2 scrollbar-thin scrollbar-thumb-gray-700">
-                {episodes.map(ep => (
-                    <button
-                        key={ep.id}
-                        onClick={() => {
-                            setCurrentEpisode(ep.number);
-                        }}
-                        className={`w-full flex items-center gap-3 p-2 rounded-xl transition-all group relative overflow-hidden ${
-                            currentEpisode === ep.number 
-                            ? 'bg-anime-primary/10 border border-anime-primary/50' 
-                            : 'hover:bg-white/5 border border-transparent'
-                        }`}
-                    >
-                        <div className="relative w-32 aspect-video bg-gray-900 rounded-lg overflow-hidden shrink-0 border border-white/5 shadow-sm group-hover:border-white/20 transition-colors">
-                            <img src={ep.thumbnail} alt={ep.title} className={`w-full h-full object-cover transition-all duration-300 ${currentEpisode === ep.number ? 'opacity-40' : 'opacity-70 group-hover:opacity-100 group-hover:scale-110'}`} />
-                            
-                            {currentEpisode === ep.number && (
-                                <div className="absolute inset-0 flex items-center justify-center">
-                                    <div className="flex gap-1 items-end h-4">
-                                        <div className="w-1 bg-anime-primary animate-[bounce_1s_infinite] h-2 shadow-[0_0_5px_#ff3d71]"></div>
-                                        <div className="w-1 bg-anime-primary animate-[bounce_1.2s_infinite] h-4 shadow-[0_0_5px_#ff3d71]"></div>
-                                        <div className="w-1 bg-anime-primary animate-[bounce_0.8s_infinite] h-3 shadow-[0_0_5px_#ff3d71]"></div>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-                        <div className="text-left flex-1 min-w-0">
-                            <div className="flex justify-between items-start">
-                                <span className={`text-sm font-bold block truncate ${currentEpisode === ep.number ? 'text-anime-primary' : 'text-gray-200 group-hover:text-white'}`}>
-                                    Episodio {ep.number}
+            <div className="flex-1 overflow-y-auto p-2 space-y-1 scrollbar-thin scrollbar-thumb-gray-700">
+                {isLoadingInfo ? (
+                    <div className="p-4 flex flex-col items-center justify-center h-40 text-gray-500 gap-2">
+                        <Loader2 size={24} className="animate-spin" />
+                        <span className="text-xs">Cargando lista...</span>
+                    </div>
+                ) : (
+                    streamEpisodes.map(ep => (
+                        <button
+                            key={ep.id}
+                            onClick={() => setCurrentEpisodeNum(ep.number)}
+                            disabled={ep.id.startsWith('fallback')}
+                            className={`w-full flex items-center gap-3 p-3 rounded-lg transition-all group relative overflow-hidden text-left ${
+                                currentEpisodeNum === ep.number 
+                                ? 'bg-anime-primary/10 border border-anime-primary/50' 
+                                : 'hover:bg-white/5 border border-transparent'
+                            }`}
+                        >
+                            <div className={`w-8 h-8 rounded flex items-center justify-center text-xs font-bold shrink-0 ${currentEpisodeNum === ep.number ? 'bg-anime-primary text-white shadow-neon' : 'bg-gray-800 text-gray-400'}`}>
+                                {ep.number}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                                <span className={`text-sm font-medium block truncate ${currentEpisodeNum === ep.number ? 'text-anime-primary' : 'text-gray-300'}`}>
+                                    {ep.title}
                                 </span>
                             </div>
-                            <span className="text-[10px] text-gray-500 truncate block mt-1.5 uppercase tracking-wider font-medium">
-                                {activeServer.lang} • {activeServer.quality}
-                            </span>
-                        </div>
-                    </button>
-                ))}
+                            {currentEpisodeNum === ep.number && (
+                                <div className="w-2 h-2 rounded-full bg-anime-primary shadow-neon animate-pulse"></div>
+                            )}
+                        </button>
+                    ))
+                )}
             </div>
          </div>
       </div>
