@@ -47,6 +47,7 @@ export interface Episode {
   title: string;
   thumbnail?: string;
   isFiller?: boolean;
+  provider?: 'aniwatch' | 'animeflv' | 'consumet';
 }
 
 export interface Server {

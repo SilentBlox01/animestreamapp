@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, SkipForward, ArrowLeft, Loader2, AlertTriangle, Settings, Subtitles, Volume2, VolumeX, Maximize, Minimize, RefreshCw } from 'lucide-react';
+import { Play, SkipForward, ArrowLeft, Loader2, AlertTriangle, Settings, Subtitles, Volume2, VolumeX, Maximize, Minimize, RefreshCw, Pause, Rewind, FastForward } from 'lucide-react';
 import { Anime, Episode, StreamData } from '../types';
 import { fetchStreamEpisodes, fetchStreamSource } from '../services/animeService';
 
@@ -16,6 +16,7 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ anime, onBack, initialEpisode
   const [currentEpisodeNum, setCurrentEpisodeNum] = useState(initialEpisode);
   const [streamData, setStreamData] = useState<StreamData | null>(null);
   const [activeQuality, setActiveQuality] = useState<string>('default');
+  const [activeProvider, setActiveProvider] = useState<'aniwatch' | 'animeflv' | 'consumet'>('consumet');
   
   // UI States
   const [isLoadingInfo, setIsLoadingInfo] = useState(true);
@@ -25,6 +26,13 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ anime, onBack, initialEpisode
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showControls, setShowControls] = useState(true);
+  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [buffered, setBuffered] = useState(0);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+  const [volume, setVolume] = useState(1);
+  const [previousVolume, setPreviousVolume] = useState(1);
   const controlsTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Refs
@@ -87,10 +95,11 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ anime, onBack, initialEpisode
         videoRef.current.load();
       }
 
-      const data = await fetchStreamSource(targetEpisode.id);
-      
+      const data = await fetchStreamSource(targetEpisode.id, targetEpisode.provider);
+
       if (data && data.sources.length > 0) {
         setStreamData(data);
+        setActiveProvider(targetEpisode.provider || 'consumet');
       } else {
         setError('No se pudo obtener el video. Intenta con otro episodio.');
       }
@@ -197,6 +206,49 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ anime, onBack, initialEpisode
     };
   }, [streamData]);
 
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const handleTimeUpdate = () => {
+      setCurrentTime(video.currentTime);
+      if (video.buffered.length > 0) {
+        const end = video.buffered.end(video.buffered.length - 1);
+        setBuffered(Math.min(end, video.duration || 0));
+      }
+    };
+
+    const handleLoadedMetadata = () => {
+      setDuration(video.duration || 0);
+      setCurrentTime(video.currentTime || 0);
+      video.volume = volume;
+      video.playbackRate = playbackSpeed;
+    };
+
+    const handleEnded = () => {
+      setIsPlaying(false);
+    };
+
+    const handleVolumeEvent = () => {
+      setVolume(video.volume);
+      setIsMuted(video.muted || video.volume === 0);
+    };
+
+    video.addEventListener('timeupdate', handleTimeUpdate);
+    video.addEventListener('progress', handleTimeUpdate);
+    video.addEventListener('loadedmetadata', handleLoadedMetadata);
+    video.addEventListener('ended', handleEnded);
+    video.addEventListener('volumechange', handleVolumeEvent);
+
+    return () => {
+      video.removeEventListener('timeupdate', handleTimeUpdate);
+      video.removeEventListener('progress', handleTimeUpdate);
+      video.removeEventListener('loadedmetadata', handleLoadedMetadata);
+      video.removeEventListener('ended', handleEnded);
+      video.removeEventListener('volumechange', handleVolumeEvent);
+    };
+  }, [playbackSpeed, volume]);
+
   // Handlers
   const handlePlayPause = () => {
     if (videoRef.current) {
@@ -212,8 +264,81 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ anime, onBack, initialEpisode
 
   const toggleMute = () => {
     if (videoRef.current) {
-      videoRef.current.muted = !videoRef.current.muted;
-      setIsMuted(videoRef.current.muted);
+      if (videoRef.current.muted || videoRef.current.volume === 0) {
+        videoRef.current.muted = false;
+        videoRef.current.volume = previousVolume || 0.5;
+        setVolume(videoRef.current.volume);
+        setIsMuted(false);
+      } else {
+        setPreviousVolume(videoRef.current.volume);
+        videoRef.current.muted = true;
+        videoRef.current.volume = 0;
+        setVolume(0);
+        setIsMuted(true);
+      }
+    }
+  };
+
+  const handleVolumeChange = (value: number) => {
+    if (!videoRef.current) return;
+    const clamped = Math.min(Math.max(value, 0), 1);
+    videoRef.current.muted = clamped === 0;
+    videoRef.current.volume = clamped;
+    setVolume(clamped);
+    setIsMuted(clamped === 0);
+    if (clamped > 0) setPreviousVolume(clamped);
+  };
+
+  const handleSeekBar = (event: React.MouseEvent<HTMLDivElement, MouseEvent>) => {
+    if (!videoRef.current || duration === 0) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const clickPosition = Math.min(Math.max(event.clientX - rect.left, 0), rect.width);
+    const percent = clickPosition / rect.width;
+    const newTime = percent * duration;
+    videoRef.current.currentTime = newTime;
+    setCurrentTime(newTime);
+  };
+
+  const seekBySeconds = (seconds: number) => {
+    if (!videoRef.current || duration === 0) return;
+    const newTime = Math.min(Math.max(videoRef.current.currentTime + seconds, 0), duration);
+    videoRef.current.currentTime = newTime;
+    setCurrentTime(newTime);
+  };
+
+  const handlePlaybackSpeed = (speed: number) => {
+    setPlaybackSpeed(speed);
+    if (videoRef.current) {
+      videoRef.current.playbackRate = speed;
+    }
+    setShowSpeedMenu(false);
+  };
+
+  const formatTime = (time: number) => {
+    if (!Number.isFinite(time)) return '00:00';
+    const minutes = Math.floor(time / 60);
+    const seconds = Math.floor(time % 60);
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === ' ') {
+      event.preventDefault();
+      handlePlayPause();
+    }
+    if (event.key === 'ArrowLeft') {
+      event.preventDefault();
+      seekBySeconds(-10);
+    }
+    if (event.key === 'ArrowRight') {
+      event.preventDefault();
+      seekBySeconds(10);
+    }
+    if (event.key.toLowerCase() === 'm') {
+      toggleMute();
+    }
+    if (event.key === 'f') {
+      toggleFullscreen();
     }
   };
 
@@ -268,8 +393,8 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ anime, onBack, initialEpisode
                  <span className="bg-anime-primary px-2 py-0.5 rounded text-[10px] text-white font-bold uppercase tracking-wider shadow-neon">
                     Episodio {currentEpisodeNum}
                  </span>
-                 <span className="text-xs text-green-400 border border-green-500/30 bg-green-500/10 px-2 py-0.5 rounded font-medium">
-                    Consumet (Gogoanime)
+                 <span className="text-xs text-green-400 border border-green-500/30 bg-green-500/10 px-2 py-0.5 rounded font-medium capitalize">
+                    {activeProvider === 'aniwatch' ? 'Aniwatch' : activeProvider === 'animeflv' ? 'AnimeFLV' : 'Gogoanime'}
                  </span>
               </div>
             </div>
@@ -277,11 +402,13 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ anime, onBack, initialEpisode
         </div>
 
         {/* Video Player Container */}
-        <div 
+        <div
             ref={containerRef}
-            className="relative aspect-video bg-black shadow-2xl rounded-2xl overflow-hidden group select-none ring-1 ring-white/5 mx-2 md:mx-0"
+            tabIndex={0}
+            className="relative aspect-video bg-black shadow-2xl rounded-2xl overflow-hidden group select-none ring-1 ring-white/5 mx-2 md:mx-0 focus:outline-none"
             onMouseMove={handleMouseMove}
             onMouseLeave={() => isPlaying && setShowControls(false)}
+            onKeyDown={handleKeyDown}
         >
              {/* Loading & Error States Overlay */}
              {(isLoadingInfo || isLoadingSource) && (
@@ -345,17 +472,62 @@ const VideoPlayer: React.FC<VideoPlayerProps> = ({ anime, onBack, initialEpisode
 
                 {/* Bottom Bar */}
                 <div className="flex items-center gap-4">
-                    <button onClick={handlePlayPause} className="text-white hover:text-anime-primary transition-colors">
-                        {isPlaying ? <span className="font-black text-xl">||</span> : <Play size={24} fill="currentColor" />}
-                    </button>
+                    <div className="flex items-center gap-2 bg-black/50 border border-white/10 px-3 py-2 rounded-full shadow-lg backdrop-blur-sm">
+                        <button onClick={() => seekBySeconds(-10)} className="text-white hover:text-anime-primary transition-colors">
+                            <Rewind size={18} />
+                        </button>
+                        <button onClick={handlePlayPause} className="text-white hover:text-anime-primary transition-colors w-9 h-9 flex items-center justify-center bg-white/10 rounded-full border border-white/10">
+                            {isPlaying ? <Pause size={20} /> : <Play size={20} fill="currentColor" />}
+                        </button>
+                        <button onClick={() => seekBySeconds(10)} className="text-white hover:text-anime-primary transition-colors">
+                            <FastForward size={18} />
+                        </button>
+                    </div>
 
-                    <button onClick={toggleMute} className="text-white hover:text-gray-300 transition-colors">
-                        {isMuted ? <VolumeX size={20} /> : <Volume2 size={20} />}
-                    </button>
+                    <div className="flex items-center gap-2 text-xs text-white/70 w-32">
+                        <span className="font-mono w-14 text-right">{formatTime(currentTime)}</span>
+                        <div className="flex-1 h-1.5 bg-white/20 rounded-full relative cursor-pointer group/progress" onClick={handleSeekBar}>
+                            <div className="absolute inset-y-0 left-0 bg-white/30" style={{ width: `${duration ? (buffered / duration) * 100 : 0}%` }}></div>
+                            <div className="absolute inset-y-0 left-0 bg-anime-primary" style={{ width: `${duration ? (currentTime / duration) * 100 : 0}%` }}></div>
+                        </div>
+                        <span className="font-mono w-14">{formatTime(duration)}</span>
+                    </div>
 
-                    {/* Progress Bar Placeholder - Native controls handle this mostly in full screen, but custom implementation would go here */}
-                    <div className="flex-1 h-1 bg-gray-600 rounded-full overflow-hidden">
-                         <div className="h-full bg-anime-primary w-0 relative"></div> 
+                    <div className="flex items-center gap-2 min-w-[180px]">
+                        <button onClick={toggleMute} className="text-white hover:text-gray-300 transition-colors">
+                            {isMuted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+                        </button>
+                        <input
+                            type="range"
+                            min={0}
+                            max={1}
+                            step={0.05}
+                            value={volume}
+                            onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+                            className="w-full accent-anime-primary cursor-pointer"
+                        />
+                    </div>
+
+                    <div className="relative">
+                        <button
+                            onClick={() => setShowSpeedMenu((prev) => !prev)}
+                            className="text-white hover:text-anime-primary transition-colors text-xs font-semibold border border-white/10 bg-black/50 rounded-full px-3 py-1"
+                        >
+                            {playbackSpeed}x
+                        </button>
+                        {showSpeedMenu && (
+                            <div className="absolute bottom-12 right-0 bg-[#10111a] border border-white/10 rounded-xl shadow-2xl overflow-hidden min-w-[120px] z-30">
+                                {[0.75, 1, 1.25, 1.5, 1.75, 2].map((speed) => (
+                                    <button
+                                        key={speed}
+                                        onClick={() => handlePlaybackSpeed(speed)}
+                                        className={`w-full text-left px-4 py-2 text-sm hover:bg-white/5 transition-colors ${playbackSpeed === speed ? 'text-anime-primary font-semibold bg-anime-primary/10' : 'text-white/80'}`}
+                                    >
+                                        {speed.toFixed(2)}x
+                                    </button>
+                                ))}
+                            </div>
+                        )}
                     </div>
 
                     <button className="text-white hover:text-gray-300 transition-colors" title="Subtítulos">

@@ -5,9 +5,12 @@ import Hero from './components/Hero';
 import AnimeGrid from './components/AnimeGrid';
 import VideoPlayer from './components/VideoPlayer';
 import AuthModal from './components/AuthModal';
+import SecurityPanel from './components/SecurityPanel';
 import { Anime, ViewState, User, Notification } from './types';
 import { getTopAnime, getSeasonNow, searchAnime } from './services/animeService';
-import { Play, Plus, Check, Clock, Trash2, ChevronDown, Settings, User as UserIcon, Shield, Bell, Eye } from 'lucide-react';
+import { Play, Plus, Check, Clock, Trash2, ChevronDown, Settings, User as UserIcon, Shield, Bell, Eye, AlertTriangle, Sparkles, Activity, Heart, History } from 'lucide-react';
+import { MOCK_TRENDING } from './constants';
+import { sanitizeTextInput } from './utils/security';
 
 // Mock Notifications
 const MOCK_NOTIFICATIONS: Notification[] = [
@@ -40,10 +43,12 @@ function App() {
   const [trendingPage, setTrendingPage] = useState(1);
   const [seasonalPage, setSeasonalPage] = useState(1);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  
+
   const [isLoadingData, setIsLoadingData] = useState(true);
   const [isLoadingEpisodes, setIsLoadingEpisodes] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
+  const [dataError, setDataError] = useState('');
+  const [searchError, setSearchError] = useState('');
 
   // Initial Load & Persistence
   useEffect(() => {
@@ -59,13 +64,31 @@ function App() {
 
     const loadData = async () => {
       setIsLoadingData(true);
-      const [topData, seasonData] = await Promise.all([
-        getTopAnime(1),
-        getSeasonNow(1)
-      ]);
-      setTrending(topData);
-      setSeasonal(seasonData);
-      setIsLoadingData(false);
+      setDataError('');
+
+      try {
+        const [topData, seasonData] = await Promise.all([
+          getTopAnime(1),
+          getSeasonNow(1)
+        ]);
+
+        const hasTopData = topData.length > 0;
+        const hasSeasonData = seasonData.length > 0;
+
+        if (!hasTopData || !hasSeasonData) {
+          setDataError('No pudimos cargar los listados en vivo. Mostrando datos de respaldo.');
+        }
+
+        setTrending(hasTopData ? topData : MOCK_TRENDING);
+        setSeasonal(hasSeasonData ? seasonData : MOCK_TRENDING);
+      } catch (error) {
+        console.error('Error loading anime data', error);
+        setTrending(MOCK_TRENDING);
+        setSeasonal(MOCK_TRENDING);
+        setDataError('No pudimos contactar a los servidores de anime. Revisa tu conexión o intenta nuevamente.');
+      } finally {
+        setIsLoadingData(false);
+      }
     };
     loadData();
 
@@ -121,10 +144,28 @@ function App() {
   // Navigation & Actions
   const handleSearch = async (query: string) => {
     setIsSearching(true);
+    setSearchError('');
     setViewState(ViewState.SEARCH);
-    const results = await searchAnime(query);
-    setSearchResults(results);
-    setIsSearching(false);
+    const safeQuery = sanitizeTextInput(query);
+    if (!safeQuery) {
+      setIsSearching(false);
+      setSearchResults([]);
+      setSearchError('La búsqueda fue bloqueada por seguridad. Intenta con un título válido.');
+      return;
+    }
+    try {
+      const results = await searchAnime(safeQuery);
+      setSearchResults(results);
+      if (results.length === 0) {
+        setSearchError('No encontramos resultados. Intenta con otro título o revisa tu conexión.');
+      }
+    } catch (error) {
+      console.error('Error searching anime', error);
+      setSearchResults([]);
+      setSearchError('No pudimos completar la búsqueda. Inténtalo más tarde.');
+    } finally {
+      setIsSearching(false);
+    }
   };
 
   const handleAnimeSelect = (anime: Anime) => {
@@ -156,24 +197,36 @@ function App() {
 
   const loadMoreTrending = async () => {
     setIsLoadingMore(true);
-    const nextPage = trendingPage + 1;
-    const newData = await getTopAnime(nextPage);
-    if (newData.length > 0) {
-      setTrending(prev => [...prev, ...newData]);
-      setTrendingPage(nextPage);
+    try {
+      const nextPage = trendingPage + 1;
+      const newData = await getTopAnime(nextPage);
+      if (newData.length > 0) {
+        setTrending(prev => [...prev, ...newData]);
+        setTrendingPage(nextPage);
+      }
+    } catch (error) {
+      console.error('Error loading more trending anime', error);
+      setDataError('No pudimos cargar más tendencias. Intenta nuevamente.');
+    } finally {
+      setIsLoadingMore(false);
     }
-    setIsLoadingMore(false);
   };
 
   const loadMoreSeasonal = async () => {
     setIsLoadingMore(true);
-    const nextPage = seasonalPage + 1;
-    const newData = await getSeasonNow(nextPage);
-    if (newData.length > 0) {
-      setSeasonal(prev => [...prev, ...newData]);
-      setSeasonalPage(nextPage);
+    try {
+      const nextPage = seasonalPage + 1;
+      const newData = await getSeasonNow(nextPage);
+      if (newData.length > 0) {
+        setSeasonal(prev => [...prev, ...newData]);
+        setSeasonalPage(nextPage);
+      }
+    } catch (error) {
+      console.error('Error loading more seasonal anime', error);
+      setDataError('No pudimos cargar más estrenos de temporada. Intenta nuevamente.');
+    } finally {
+      setIsLoadingMore(false);
     }
-    setIsLoadingMore(false);
   };
 
   const handleViewStateChange = (view: ViewState) => {
@@ -183,11 +236,42 @@ function App() {
     }
   };
 
+  const highlightCards = [
+    {
+      title: 'Tendencias',
+      description: 'Mejores valorados de la semana',
+      value: trending.length || '—',
+      icon: <Sparkles size={18} />,
+      accent: 'from-pink-500/20 to-orange-500/10'
+    },
+    {
+      title: 'En emisión',
+      description: 'Episodios nuevos cada día',
+      value: seasonal.length || '—',
+      icon: <Activity size={18} />,
+      accent: 'from-blue-500/20 to-cyan-500/10'
+    },
+    {
+      title: 'Favoritos',
+      description: 'Tu lista personalizada',
+      value: favorites.length || 0,
+      icon: <Heart size={18} />,
+      accent: 'from-purple-500/20 to-pink-500/10'
+    },
+    {
+      title: 'Historial',
+      description: 'Lo que viste recientemente',
+      value: history.length || 0,
+      icon: <History size={18} />,
+      accent: 'from-emerald-500/20 to-teal-500/10'
+    }
+  ];
+
   return (
-    <div className="h-screen w-screen overflow-hidden bg-[#0b0c15] text-gray-100 font-sans flex flex-col">
-      <Navbar 
-        onSearch={handleSearch} 
-        toggleSidebar={() => setSidebarOpen(!sidebarOpen)} 
+    <div className="h-screen w-screen overflow-hidden bg-[#05060d] text-gray-100 font-sans flex flex-col">
+      <Navbar
+        onSearch={handleSearch}
+        toggleSidebar={() => setSidebarOpen(!sidebarOpen)}
         setViewState={handleViewStateChange}
         user={user}
         onOpenAuth={() => setAuthOpen(true)}
@@ -199,7 +283,7 @@ function App() {
       <div className="flex flex-1 overflow-hidden pt-20 relative">
         {/* Mobile Backdrop for Sidebar */}
         {isMobile && sidebarOpen && (
-          <div 
+          <div
             className="fixed inset-0 bg-black/50 z-30 backdrop-blur-sm animate-fade-in"
             onClick={() => setSidebarOpen(false)}
           ></div>
@@ -211,28 +295,63 @@ function App() {
           setViewState={handleViewStateChange}
         />
 
-        <main 
+        <main
           className={`flex-1 h-full overflow-y-auto scrollbar-thin transition-all duration-300 relative ${
             sidebarOpen ? 'md:ml-64' : 'md:ml-20'
           } ml-0 w-full`}
         >
-          <div className="p-4 md:p-8 max-w-[1920px] mx-auto min-h-full pb-20 md:pb-8">
-            
+          <div className="absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(255,61,113,0.05),transparent_35%),radial-gradient(circle_at_80%_0%,rgba(66,141,255,0.05),transparent_25%),radial-gradient(circle_at_50%_80%,rgba(0,255,200,0.04),transparent_30%)] pointer-events-none" />
+          <div className="absolute inset-0 opacity-30 bg-[linear-gradient(135deg,rgba(255,255,255,0.04)_25%,transparent_25%),linear-gradient(225deg,rgba(255,255,255,0.04)_25%,transparent_25%),linear-gradient(45deg,rgba(255,255,255,0.04)_25%,transparent_25%),linear-gradient(315deg,rgba(255,255,255,0.04)_25%,rgba(255,255,255,0.04)_25%)] bg-[length:24px_24px]" />
+          <div className="relative p-4 md:p-8 max-w-[1920px] mx-auto min-h-full pb-20 md:pb-8">
+
+            {dataError && (
+              <div className="mb-6 flex items-start gap-3 rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-4 text-yellow-300">
+                <AlertTriangle size={20} className="mt-0.5" />
+                <div>
+                  <p className="font-semibold">Se mostrará contenido de respaldo.</p>
+                  <p className="text-sm text-yellow-200/80">{dataError}</p>
+                </div>
+              </div>
+            )}
+
             {/* HOME VIEW */}
             {viewState === ViewState.HOME && (
               <div className="animate-fade-in space-y-8 md:space-y-12">
                 {!isLoadingData && trending.length > 0 && (
-                  <Hero 
-                      featured={trending[0]} 
+                  <Hero
+                      featured={trending[0]}
                       onWatch={(a) => handleWatch(a, 1)}
                       onInfo={handleAnimeSelect}
                     />
                 )}
-                
-                <AnimeGrid 
-                  title="Top Anime Japón 🔥" 
-                  animes={trending.slice(1, 13)} 
-                  onSelect={handleAnimeSelect} 
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 md:gap-6">
+                  {highlightCards.map(card => (
+                    <div
+                      key={card.title}
+                      className={`relative overflow-hidden rounded-2xl border border-white/5 bg-white/5 backdrop-blur-lg p-4 md:p-5 shadow-xl shadow-black/30 flex items-center gap-4 md:gap-6`}
+                    >
+                      <div className={`w-12 h-12 rounded-xl bg-gradient-to-br ${card.accent} flex items-center justify-center text-white shadow-neon`}>{card.icon}</div>
+                      <div className="space-y-1">
+                        <p className="text-xs uppercase tracking-[0.2em] text-gray-400 font-semibold">{card.title}</p>
+                        <p className="text-2xl font-display font-bold text-white leading-none">{card.value}</p>
+                        <p className="text-sm text-gray-400">{card.description}</p>
+                      </div>
+                      <div className="absolute inset-0 bg-gradient-to-r from-white/5 via-transparent to-transparent opacity-0 hover:opacity-100 transition-opacity duration-500" />
+                    </div>
+                  ))}
+                </div>
+
+                <SecurityPanel
+                  onClearHistory={clearHistory}
+                  onLogout={handleLogout}
+                  user={user}
+                />
+
+                <AnimeGrid
+                  title="Top Anime Japón 🔥"
+                  animes={trending.slice(1, 13)}
+                  onSelect={handleAnimeSelect}
                   isLoading={isLoadingData}
                   enableFilters={true}
                   onToggleFavorite={toggleFavorite}
@@ -376,8 +495,18 @@ function App() {
                     <button onClick={() => setViewState(ViewState.HOME)} className="text-gray-400 hover:text-white">Volver</button>
                     <h2 className="text-xl md:text-2xl font-bold font-display">Resultados de búsqueda</h2>
                 </div>
-                
-                <AnimeGrid 
+
+                {searchError && (
+                  <div className="mb-6 flex items-start gap-3 rounded-xl border border-yellow-500/30 bg-yellow-500/10 p-4 text-yellow-300">
+                    <AlertTriangle size={20} className="mt-0.5" />
+                    <div>
+                      <p className="font-semibold">Problema al buscar</p>
+                      <p className="text-sm text-yellow-200/80">{searchError}</p>
+                    </div>
+                  </div>
+                )}
+
+                <AnimeGrid
                   title={isSearching ? "Buscando..." : `Resultados`}
                   animes={searchResults}
                   onSelect={handleAnimeSelect}

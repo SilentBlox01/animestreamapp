@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Search, Bell, User as UserIcon, Menu, LogOut, Settings, Zap, X } from 'lucide-react';
 import { ViewState, User, Notification } from '../types';
+import { sanitizeTextInput } from '../utils/security';
 
 interface NavbarProps {
   onSearch: (query: string) => void;
@@ -32,10 +33,13 @@ const Navbar: React.FC<NavbarProps> = ({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (query.trim()) {
-      onSearch(query);
+    const safeQuery = sanitizeTextInput(query, 80);
+    if (safeQuery) {
+      onSearch(safeQuery);
       setViewState(ViewState.SEARCH);
       setMobileSearchOpen(false);
+    } else {
+      setQuery('');
     }
   };
 

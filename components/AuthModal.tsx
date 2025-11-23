@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { X, Mail, Lock, ArrowRight, Loader2, AlertCircle, User as UserIcon, ShieldCheck, CheckCircle2, ChevronLeft } from 'lucide-react';
 import { User } from '../types';
 import { loginUser, requestRegistration, verifyAndRegister } from '../services/authService';
+import { isStrongPassword, isValidEmail, sanitizeTextInput } from '../utils/security';
 
 interface AuthModalProps {
   isOpen: boolean;
@@ -44,15 +45,18 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLogin }) => {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    
-    if (!email || !password) {
-      setError('Introduce correo y contraseña.');
+
+    const safeEmail = sanitizeTextInput(email, 120);
+    const safePassword = password.trim();
+
+    if (!isValidEmail(safeEmail) || !safePassword) {
+      setError('Introduce un correo válido y tu contraseña.');
       return;
     }
 
     setIsLoading(true);
     try {
-      const user = await loginUser(email, password);
+      const user = await loginUser(safeEmail, safePassword);
       onLogin(user);
       onClose();
     } catch (err: any) {
@@ -66,19 +70,28 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLogin }) => {
     e.preventDefault();
     setError('');
 
-    if (!email || !username || !password) {
+    const safeEmail = sanitizeTextInput(email, 120);
+    const safeUsername = sanitizeTextInput(username, 80);
+    const safePassword = password.trim();
+
+    if (!safeEmail || !safeUsername || !safePassword) {
       setError('Todos los campos son obligatorios.');
       return;
     }
 
-    if (password.length < 6) {
-      setError('La contraseña debe tener al menos 6 caracteres.');
+    if (!isValidEmail(safeEmail)) {
+      setError('Usa un correo electrónico válido.');
+      return;
+    }
+
+    if (!isStrongPassword(safePassword)) {
+      setError('La contraseña debe incluir mayúsculas, minúsculas y números (mínimo 8 caracteres).');
       return;
     }
 
     setIsLoading(true);
     try {
-      await requestRegistration(username, email, password);
+      await requestRegistration(safeUsername, safeEmail, safePassword);
       setView('REGISTER_VERIFY');
       setError(''); // Clear errors if successful
     } catch (err: any) {
@@ -92,14 +105,16 @@ const AuthModal: React.FC<AuthModalProps> = ({ isOpen, onClose, onLogin }) => {
     e.preventDefault();
     setError('');
 
-    if (verificationCode.length !== 6) {
+    const safeCode = sanitizeTextInput(verificationCode, 6);
+
+    if (safeCode.length !== 6) {
       setError('El código debe tener 6 dígitos.');
       return;
     }
 
     setIsLoading(true);
     try {
-      const user = await verifyAndRegister(email, verificationCode);
+      const user = await verifyAndRegister(email, safeCode);
       onLogin(user);
       onClose();
     } catch (err: any) {
