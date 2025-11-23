@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AniStream AI - Tu Portal de Anime</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Oswald:wght@500;600;700&display=swap" rel="stylesheet">
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+              display: ['Oswald', 'sans-serif'],
+            },
+            colors: {
+              anime: {
+                dark: '#0b0c15', // Deep background
+                card: '#151621', // Card background
+                primary: '#ff3d71', // Neon Pink/Red
+                secondary: '#3b82f6', // Neon Blue
+                accent: '#1f202e',
+                text: '#f3f4f6'
+              }
+            },
+            boxShadow: {
+              'neon': '0 0 10px rgba(255, 61, 113, 0.5), 0 0 20px rgba(255, 61, 113, 0.3)',
+              'neon-blue': '0 0 10px rgba(59, 130, 246, 0.5), 0 0 20px rgba(59, 130, 246, 0.3)',
+              'glass': '0 8px 32px 0 rgba(0, 0, 0, 0.37)',
+            },
+            animation: {
+              'fade-in': 'fadeIn 0.5s ease-out',
+              'slide-up': 'slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1)',
+              'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+            },
+            keyframes: {
+              fadeIn: {
+                '0%': { opacity: '0' },
+                '100%': { opacity: '1' },
+              },
+              slideUp: {
+                '0%': { transform: 'translateY(20px)', opacity: '0' },
+                '100%': { transform: 'translateY(0)', opacity: '1' },
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      /* Global Reset for Independent Scrolling */
+      html, body {
+        height: 100%;
+        width: 100%;
+        overflow: hidden; /* Prevent body scroll */
+        background-color: #0b0c15;
+      }
+
+      /* Custom Thin Scrollbar */
+      .scrollbar-thin::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+      }
+      .scrollbar-thin::-webkit-scrollbar-track {
+        background: rgba(255, 255, 255, 0.02);
+      }
+      .scrollbar-thin::-webkit-scrollbar-thumb {
+        background: #33334d;
+        border-radius: 10px;
+      }
+      .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+        background: #ff3d71;
+      }
+      
+      /* Utilities */
+      .scrollbar-hide::-webkit-scrollbar {
+          display: none;
+      }
+      .scrollbar-hide {
+          -ms-overflow-style: none;
+          scrollbar-width: none;
+      }
+      
+      .mask-linear {
+        mask-image: linear-gradient(to right, black 85%, transparent 100%);
+        -webkit-mask-image: linear-gradient(to right, black 85%, transparent 100%);
+      }
+
+      img {
+        transition: opacity 0.3s ease-in-out;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "lucide-react": "https://aistudiocdn.com/lucide-react@^0.554.0",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0"
+  }
+}
+</script>
+</head>
+  <body class="bg-anime-dark text-anime-text antialiased selection:bg-anime-primary selection:text-white">
+    <div id="root" class="h-full w-full"></div>
+  </body>
+</html>

@@ -1,0 +1,5 @@
+{
+  "name": "Copy of Anime Project",
+  "description": "Plataforma completa de anime con integración Jikan API, sistema de favoritos, historial, filtros por género y persistencia de datos.",
+  "requestFramePermissions": []
+}
